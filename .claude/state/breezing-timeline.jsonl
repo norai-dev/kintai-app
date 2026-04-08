@@ -7,3 +7,4 @@
 {"event":"task_completed","teammate":"","task_id":"7","subject":"管理者ダッシュボード","description":"本日の出勤状況、未承認申請数、有給消化率を実データで表示","agent_id":"","agent_type":"","timestamp":"2026-04-08T12:05:17Z"}
 {"event":"task_completed","teammate":"","task_id":"8","subject":"月次レポート（CSV出力）","description":"全員の月次勤怠集計をCSVでダウンロード","agent_id":"","agent_type":"","timestamp":"2026-04-08T12:06:03Z"}
 {"event":"task_completed","teammate":"","task_id":"9","subject":"残業アラート","description":"月45h超の残業警告をダッシュボードに表示","agent_id":"","agent_type":"","timestamp":"2026-04-08T12:06:04Z"}
+{"event":"task_completed","teammate":"","task_id":"10","subject":"Slack連携実装","description":"Slack App作成、スラッシュコマンド /kintai の実装、通知Webhook","agent_id":"","agent_type":"","timestamp":"2026-04-08T22:30:59Z"}
