@@ -1,3 +1,4 @@
 {"event":"task_completed","teammate":"","task_id":"1","subject":"Next.js + Supabase プロジェクトセットアップ","description":"Next.js 15 App Router + Tailwind + shadcn/ui + Supabase のプロジェクト作成、GitHubにpush","agent_id":"","agent_type":"","timestamp":"2026-04-08T11:02:20Z"}
 {"event":"task_completed","teammate":"","task_id":"2","subject":"DBスキーマ作成","description":"Supabaseマイグレーションファイルでテーブル定義（users, attendance_records, leave_balances, leave_requests, attendance_co","agent_id":"","agent_type":"","timestamp":"2026-04-08T11:03:08Z"}
 {"event":"task_completed","teammate":"","task_id":"3","subject":"認証・RLS設定","description":"Supabase Auth設定、Row Level Security ポリシー設定","agent_id":"","agent_type":"","timestamp":"2026-04-08T11:03:08Z"}
+{"event":"task_completed","teammate":"","task_id":"4","subject":"基本レイアウト・ナビゲーション","description":"サイドバー + ヘッダーのレイアウト、ページルーティング","agent_id":"","agent_type":"","timestamp":"2026-04-08T11:08:10Z"}
