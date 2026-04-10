@@ -107,3 +107,78 @@ export async function getTodayAttendance() {
 
   return data;
 }
+
+export async function upsertAttendance(formData: {
+  date: string;
+  clock_in: string | null;
+  clock_out: string | null;
+  break_start: string | null;
+  break_end: string | null;
+  work_location: "office" | "remote";
+  note: string;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { error: "認証されていません" };
+
+  const supabase = await createClient();
+
+  // 既存レコードを確認
+  const { data: existing } = await supabase
+    .from("attendance_records")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("date", formData.date)
+    .single();
+
+  // 時刻文字列（HH:MM）をISO文字列に変換
+  const toISO = (date: string, time: string | null) => {
+    if (!time) return null;
+    return new Date(`${date}T${time}:00+09:00`).toISOString();
+  };
+
+  const record = {
+    user_id: user.id,
+    date: formData.date,
+    clock_in: toISO(formData.date, formData.clock_in),
+    clock_out: toISO(formData.date, formData.clock_out),
+    break_start: toISO(formData.date, formData.break_start),
+    break_end: toISO(formData.date, formData.break_end),
+    work_location: formData.work_location,
+    source: "web" as const,
+    note: formData.note || null,
+  };
+
+  if (existing) {
+    const { error } = await supabase
+      .from("attendance_records")
+      .update(record)
+      .eq("id", existing.id);
+    if (error) return { error: error.message };
+  } else {
+    const { error } = await supabase
+      .from("attendance_records")
+      .insert(record);
+    if (error) return { error: error.message };
+  }
+
+  revalidatePath("/calendar");
+  return { success: true };
+}
+
+export async function deleteAttendance(date: string) {
+  const user = await getCurrentUser();
+  if (!user) return { error: "認証されていません" };
+
+  const supabase = await createClient();
+
+  const { error } = await supabase
+    .from("attendance_records")
+    .delete()
+    .eq("user_id", user.id)
+    .eq("date", date);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/calendar");
+  return { success: true };
+}

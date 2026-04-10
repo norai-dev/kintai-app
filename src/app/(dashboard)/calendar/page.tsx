@@ -1,8 +1,24 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useTransition } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -12,14 +28,21 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 import { getMonthlyAttendance } from "../actions/calendar";
+import { upsertAttendance, deleteAttendance } from "../actions/attendance";
 import type { AttendanceRecord } from "@/types/database";
 
 const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
 
 function formatHM(iso: string | null) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tokyo" });
+}
+
+function isoToTimeInput(iso: string | null): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tokyo" });
 }
 
 function calcWorkMinutes(record: AttendanceRecord): number {
@@ -45,13 +68,26 @@ export default function CalendarPage() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editDate, setEditDate] = useState("");
+  const [editClockIn, setEditClockIn] = useState("");
+  const [editClockOut, setEditClockOut] = useState("");
+  const [editBreakStart, setEditBreakStart] = useState("");
+  const [editBreakEnd, setEditBreakEnd] = useState("");
+  const [editLocation, setEditLocation] = useState<"office" | "remote">("remote");
+  const [editNote, setEditNote] = useState("");
+  const [isPending, startTransition] = useTransition();
 
-  useEffect(() => {
+  const loadData = () => {
     setLoading(true);
     getMonthlyAttendance(year, month).then((data) => {
       setRecords(data);
       setLoading(false);
     });
+  };
+
+  useEffect(() => {
+    loadData();
   }, [year, month]);
 
   const daysInMonth = new Date(year, month, 0).getDate();
@@ -71,8 +107,59 @@ export default function CalendarPage() {
     else setMonth(month + 1);
   };
 
+  const openEdit = (day: number) => {
+    const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const record = recordMap.get(dateStr);
+    setEditDate(dateStr);
+    setEditClockIn(record ? isoToTimeInput(record.clock_in) : "");
+    setEditClockOut(record ? isoToTimeInput(record.clock_out) : "");
+    setEditBreakStart(record ? isoToTimeInput(record.break_start) : "");
+    setEditBreakEnd(record ? isoToTimeInput(record.break_end) : "");
+    setEditLocation(record?.work_location === "office" ? "office" : "remote");
+    setEditNote(record?.note || "");
+    setEditOpen(true);
+  };
+
+  const handleSave = () => {
+    startTransition(async () => {
+      const result = await upsertAttendance({
+        date: editDate,
+        clock_in: editClockIn || null,
+        clock_out: editClockOut || null,
+        break_start: editBreakStart || null,
+        break_end: editBreakEnd || null,
+        work_location: editLocation,
+        note: editNote,
+      });
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        toast.success("勤怠を保存しました");
+        setEditOpen(false);
+        loadData();
+      }
+    });
+  };
+
+  const handleDelete = () => {
+    startTransition(async () => {
+      const result = await deleteAttendance(editDate);
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        toast.success("勤怠を削除しました");
+        setEditOpen(false);
+        loadData();
+      }
+    });
+  };
+
   const totalWorkMinutes = records.reduce((sum, r) => sum + calcWorkMinutes(r), 0);
   const totalWorkDays = records.filter((r) => r.clock_in).length;
+
+  const editDateLabel = editDate
+    ? new Date(editDate + "T00:00:00").toLocaleDateString("ja-JP", { month: "long", day: "numeric", weekday: "long" })
+    : "";
 
   return (
     <div className="space-y-6">
@@ -128,12 +215,13 @@ export default function CalendarPage() {
                 <TableHead>休憩</TableHead>
                 <TableHead>勤務時間</TableHead>
                 <TableHead>場所</TableHead>
+                <TableHead className="w-16">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                     読み込み中...
                   </TableCell>
                 </TableRow>
@@ -145,7 +233,11 @@ export default function CalendarPage() {
                   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
                   return (
-                    <TableRow key={day} className={isWeekend ? "bg-muted/50" : ""}>
+                    <TableRow
+                      key={day}
+                      className={`${isWeekend ? "bg-muted/50" : ""} cursor-pointer hover:bg-muted/30`}
+                      onClick={() => openEdit(day)}
+                    >
                       <TableCell className="font-medium">{month}/{day}</TableCell>
                       <TableCell className={dayOfWeek === 0 ? "text-red-500" : dayOfWeek === 6 ? "text-blue-500" : ""}>
                         {WEEKDAYS[dayOfWeek]}
@@ -165,6 +257,11 @@ export default function CalendarPage() {
                           </Badge>
                         )}
                       </TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="sm" className="text-xs" onClick={(e) => { e.stopPropagation(); openEdit(day); }}>
+                          編集
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   );
                 })
@@ -173,6 +270,62 @@ export default function CalendarPage() {
           </Table>
         </CardContent>
       </Card>
+
+      {/* 編集ダイアログ */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editDateLabel}の勤怠</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>出勤時刻</Label>
+                <Input type="time" value={editClockIn} onChange={(e) => setEditClockIn(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>退勤時刻</Label>
+                <Input type="time" value={editClockOut} onChange={(e) => setEditClockOut(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>休憩開始</Label>
+                <Input type="time" value={editBreakStart} onChange={(e) => setEditBreakStart(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>休憩終了</Label>
+                <Input type="time" value={editBreakEnd} onChange={(e) => setEditBreakEnd(e.target.value)} />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>勤務場所</Label>
+              <Select value={editLocation} onValueChange={(v) => v && setEditLocation(v as "office" | "remote")}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="remote">リモート</SelectItem>
+                  <SelectItem value="office">出社</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>メモ</Label>
+              <Textarea value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="任意" />
+            </div>
+            <div className="flex justify-between">
+              <Button variant="destructive" size="sm" onClick={handleDelete} disabled={isPending}>
+                削除
+              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setEditOpen(false)}>キャンセル</Button>
+                <Button onClick={handleSave} disabled={isPending}>
+                  {isPending ? "保存中..." : "保存"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
