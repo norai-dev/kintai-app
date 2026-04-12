@@ -12,8 +12,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { toast } from "sonner";
 import { getMonthlyReport, generateCSV, generateDetailCSV } from "../../actions/reports";
+import { getClosingStatus, closeMonth, reopenMonth } from "../../actions/closing";
 import { getMonthlyOvertimeLevel } from "@/lib/overtime-utils";
+import type { MonthlyClosing } from "@/types/database";
 
 type ReportRow = {
   name: string;
@@ -33,13 +45,27 @@ export default function ReportsPage() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [report, setReport] = useState<ReportRow[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [closing, setClosing] = useState<MonthlyClosing | null>(null);
+  const [closingLoading, setClosingLoading] = useState(false);
+  const [reopenDialogOpen, setReopenDialogOpen] = useState(false);
+  const [reopenReason, setReopenReason] = useState("");
 
-  useEffect(() => {
+  const isClosed = closing !== null && closing.reopened_at === null;
+
+  const loadData = () => {
     setLoading(true);
-    getMonthlyReport(year, month).then((data) => {
-      setReport(data);
+    Promise.all([
+      getMonthlyReport(year, month),
+      getClosingStatus(year, month),
+    ]).then(([reportData, closingData]) => {
+      setReport(reportData);
+      setClosing(closingData);
       setLoading(false);
     });
+  };
+
+  useEffect(() => {
+    loadData();
   }, [year, month]);
 
   const prevMonth = () => {
@@ -77,6 +103,39 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url);
   };
 
+  const handleCloseMonth = async () => {
+    if (!confirm(`${year}年${month}月を月次確定しますか？\n確定後はメンバーの勤怠データを編集できなくなります。`)) return;
+    setClosingLoading(true);
+    const result = await closeMonth(year, month);
+    if (result.error) {
+      toast.error(result.error);
+    } else {
+      toast.success(`${year}年${month}月を月次確定しました`);
+      const updated = await getClosingStatus(year, month);
+      setClosing(updated);
+    }
+    setClosingLoading(false);
+  };
+
+  const handleReopenMonth = async () => {
+    if (!reopenReason.trim()) {
+      toast.error("解除理由を入力してください");
+      return;
+    }
+    setClosingLoading(true);
+    const result = await reopenMonth(year, month, reopenReason);
+    if (result.error) {
+      toast.error(result.error);
+    } else {
+      toast.success(`${year}年${month}月の月次確定を解除しました`);
+      setReopenDialogOpen(false);
+      setReopenReason("");
+      const updated = await getClosingStatus(year, month);
+      setClosing(updated);
+    }
+    setClosingLoading(false);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -85,8 +144,59 @@ export default function ReportsPage() {
           <Button variant="outline" size="sm" onClick={prevMonth}>←</Button>
           <span className="text-lg font-medium w-32 text-center">{year}年{month}月</span>
           <Button variant="outline" size="sm" onClick={nextMonth}>→</Button>
+          {isClosed && (
+            <Badge variant="secondary" className="ml-2 bg-blue-100 text-blue-800">
+              確定済
+            </Badge>
+          )}
         </div>
       </div>
+
+      {/* 月次締め状態パネル */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-muted-foreground">月次確定状態</CardTitle>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between gap-4">
+          {isClosed ? (
+            <div className="text-sm text-blue-800">
+              <span className="font-medium">確定済み</span>
+              {closing?.closed_at && (
+                <span className="ml-2 text-muted-foreground">
+                  {new Date(closing.closed_at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })} 確定
+                </span>
+              )}
+              {closing?.reopen_reason && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  前回解除理由: {closing.reopen_reason}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">未確定</div>
+          )}
+          <div className="flex gap-2">
+            {isClosed ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setReopenDialogOpen(true)}
+                disabled={closingLoading}
+              >
+                確定解除
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                onClick={handleCloseMonth}
+                disabled={closingLoading || loading}
+              >
+                {closingLoading ? "処理中..." : "月次確定"}
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="flex justify-end gap-2">
         <Button variant="outline" onClick={handleDownloadCSV} disabled={loading || !report}>
@@ -153,6 +263,41 @@ export default function ReportsPage() {
           </Table>
         </CardContent>
       </Card>
+
+      {/* 確定解除ダイアログ */}
+      <Dialog open={reopenDialogOpen} onOpenChange={setReopenDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{year}年{month}月の月次確定を解除</DialogTitle>
+            <DialogDescription>
+              解除後はメンバーが勤怠データを編集できるようになります。解除理由を入力してください。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>解除理由</Label>
+              <Textarea
+                value={reopenReason}
+                onChange={(e) => setReopenReason(e.target.value)}
+                placeholder="例: 〇〇さんの勤怠漏れを修正するため"
+                rows={3}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => { setReopenDialogOpen(false); setReopenReason(""); }}>
+                キャンセル
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleReopenMonth}
+                disabled={closingLoading || !reopenReason.trim()}
+              >
+                {closingLoading ? "処理中..." : "確定解除"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

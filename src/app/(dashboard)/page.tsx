@@ -4,8 +4,17 @@ import { useState, useEffect, useTransition } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { clockIn, clockOut, startBreak, endBreak, getTodayAttendance } from "./actions/attendance";
+import {
+  clockIn,
+  clockOut,
+  startBreak,
+  endBreak,
+  getTodayAttendance,
+  getBreakRecords,
+} from "./actions/attendance";
+import { getTotalBreakMinutes } from "@/lib/break-utils";
 import { toast } from "sonner";
+import type { BreakRecord } from "@/types/database";
 
 type ClockStatus = "not_started" | "working" | "on_break" | "finished";
 
@@ -14,8 +23,8 @@ export default function ClockPage() {
   const [status, setStatus] = useState<ClockStatus>("not_started");
   const [clockInTime, setClockInTime] = useState<string | null>(null);
   const [clockOutTime, setClockOutTime] = useState<string | null>(null);
-  const [breakStartTime, setBreakStartTime] = useState<string | null>(null);
-  const [breakEndTime, setBreakEndTime] = useState<string | null>(null);
+  const [attendanceId, setAttendanceId] = useState<string | null>(null);
+  const [breakRecords, setBreakRecords] = useState<BreakRecord[]>([]);
   const [isPending, startTransition] = useTransition();
 
   // 現在時刻の更新
@@ -26,16 +35,21 @@ export default function ClockPage() {
 
   // 初期ロード: 今日の打刻状況を取得
   useEffect(() => {
-    getTodayAttendance().then((record) => {
+    getTodayAttendance().then(async (record) => {
       if (!record) return;
       setClockInTime(record.clock_in);
       setClockOutTime(record.clock_out);
-      setBreakStartTime(record.break_start);
-      setBreakEndTime(record.break_end);
+      setAttendanceId(record.id);
+
+      // break_records から休憩情報を取得
+      const breaks = await getBreakRecords(record.id);
+      setBreakRecords(breaks);
+
+      const hasOpenBreak = breaks.some((b) => !b.break_end);
 
       if (record.clock_out) {
         setStatus("finished");
-      } else if (record.break_start && !record.break_end) {
+      } else if (hasOpenBreak) {
         setStatus("on_break");
       } else if (record.clock_in) {
         setStatus("working");
@@ -49,18 +63,14 @@ export default function ClockPage() {
   const formatHM = (iso: string) =>
     new Date(iso).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
 
+  const totalBreakMinutes = getTotalBreakMinutes(breakRecords);
+
   const getWorkingMinutes = () => {
     if (!clockInTime) return 0;
     const start = new Date(clockInTime).getTime();
     const end = clockOutTime ? new Date(clockOutTime).getTime() : Date.now();
     const totalMin = Math.floor((end - start) / 60000);
-
-    let breakMin = 0;
-    if (breakStartTime) {
-      const bEnd = breakEndTime ? new Date(breakEndTime).getTime() : Date.now();
-      breakMin = Math.floor((bEnd - new Date(breakStartTime).getTime()) / 60000);
-    }
-    return Math.max(0, totalMin - breakMin);
+    return Math.max(0, totalMin - totalBreakMinutes);
   };
 
   const formatDuration = (minutes: number) => {
@@ -76,8 +86,13 @@ export default function ClockPage() {
         toast.error(result.error);
         return;
       }
-      setClockInTime(new Date().toISOString());
+      const now = new Date().toISOString();
+      setClockInTime(now);
       setStatus("working");
+      // 出勤後に attendance_id を取得
+      getTodayAttendance().then((record) => {
+        if (record) setAttendanceId(record.id);
+      });
       toast.success("出勤しました");
     });
   };
@@ -103,7 +118,14 @@ export default function ClockPage() {
           toast.error(result.error);
           return;
         }
-        setBreakStartTime(new Date().toISOString());
+        const newBreak: BreakRecord = {
+          id: crypto.randomUUID(),
+          attendance_id: attendanceId ?? "",
+          break_start: new Date().toISOString(),
+          break_end: null,
+          created_at: new Date().toISOString(),
+        };
+        setBreakRecords((prev) => [...prev, newBreak]);
         setStatus("on_break");
         toast("休憩開始");
       } else if (status === "on_break") {
@@ -112,7 +134,10 @@ export default function ClockPage() {
           toast.error(result.error);
           return;
         }
-        setBreakEndTime(new Date().toISOString());
+        const now = new Date().toISOString();
+        setBreakRecords((prev) =>
+          prev.map((b) => (!b.break_end ? { ...b, break_end: now } : b))
+        );
         setStatus("working");
         toast("休憩終了");
       }
@@ -126,11 +151,10 @@ export default function ClockPage() {
     finished: { text: "退勤済", variant: "secondary" },
   };
 
-  const getBreakMinutes = () => {
-    if (!breakStartTime) return 0;
-    const bEnd = breakEndTime ? new Date(breakEndTime).getTime() : Date.now();
-    return Math.floor((bEnd - new Date(breakStartTime).getTime()) / 60000);
-  };
+  const completedBreakCount = breakRecords.filter((b) => b.break_end).length;
+  const totalCompletedBreakMin = getTotalBreakMinutes(
+    breakRecords.filter((b) => !!b.break_end)
+  );
 
   return (
     <div className="mx-auto max-w-lg space-y-6">
@@ -199,6 +223,13 @@ export default function ClockPage() {
               本日の勤務は終了しました
             </p>
           )}
+
+          {/* 休憩回数・合計表示 */}
+          {clockInTime && completedBreakCount > 0 && (
+            <p className="text-center text-sm text-muted-foreground">
+              休憩 {completedBreakCount}回 (計{totalCompletedBreakMin}分)
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -216,7 +247,7 @@ export default function ClockPage() {
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">休憩</p>
-                <p className="text-lg font-semibold">{getBreakMinutes()}分</p>
+                <p className="text-lg font-semibold">{totalBreakMinutes}分</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">勤務時間</p>
