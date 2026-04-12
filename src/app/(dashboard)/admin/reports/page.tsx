@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getMonthlyReport, generateCSV } from "../../actions/reports";
+import { getMonthlyReport, generateCSV, generateDetailCSV } from "../../actions/reports";
 import { getMonthlyOvertimeLevel } from "@/lib/overtime-utils";
 
 type ReportRow = {
@@ -59,7 +59,20 @@ export default function ReportsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `勤怠レポート_${year}年${month}月.csv`;
+    a.download = `勤怠サマリー_${year}年${month}月.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadDetailCSV = async () => {
+    const csv = await generateDetailCSV(year, month);
+    if (!csv) return;
+    const bom = "\uFEFF";
+    const blob = new Blob([bom + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `勤怠日別詳細_${year}年${month}月.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -75,9 +88,12 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      <div className="flex justify-end">
-        <Button onClick={handleDownloadCSV} disabled={loading || !report}>
-          CSVダウンロード
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" onClick={handleDownloadCSV} disabled={loading || !report}>
+          サマリーCSV
+        </Button>
+        <Button onClick={handleDownloadDetailCSV} disabled={loading || !report}>
+          日別詳細CSV
         </Button>
       </div>
 
