@@ -26,6 +26,7 @@ const adminNav = [
   { title: "承認", href: "/admin/approvals", icon: "✅" },
   { title: "メンバー管理", href: "/admin/members", icon: "👥" },
   { title: "月次レポート", href: "/admin/reports", icon: "📋" },
+  { title: "祝日管理", href: "/admin/holidays", icon: "🗓" },
 ];
 
 export function AppSidebar() {

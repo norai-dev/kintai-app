@@ -150,14 +150,23 @@ export async function getDashboardData() {
     let y = currentYear;
     if (m <= 0) { m += 12; y -= 1; }
     const { start, end } = monthRange(y, m);
-    const { data: mRecords } = await supabase
-      .from("attendance_records")
-      .select("user_id, clock_in, clock_out, break_start, break_end, users!inner(name)")
-      .gte("date", start)
-      .lt("date", end);
+    const [{ data: mRecords }, { data: mHolidayRows }] = await Promise.all([
+      supabase
+        .from("attendance_records")
+        .select("user_id, date, clock_in, clock_out, break_start, break_end, users!inner(name)")
+        .gte("date", start)
+        .lt("date", end),
+      supabase
+        .from("holidays")
+        .select("date")
+        .gte("date", start)
+        .lt("date", end),
+    ]);
 
+    const mHolidaySet = new Set<string>((mHolidayRows ?? []).map((h: { date: string }) => h.date));
     const mMap = calcOvertimeMinutesByUser(
-      (mRecords ?? []) as Record<string, unknown>[]
+      (mRecords ?? []) as Record<string, unknown>[],
+      mHolidaySet
     );
 
     mMap.forEach((v, userId) => {
