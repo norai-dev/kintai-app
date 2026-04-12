@@ -55,6 +55,7 @@ export async function getMonthlyReport(year: number, month: number) {
 
     const standardMin = workDays * 8 * 60;
     const overtimeMin = Math.max(0, totalWorkMin - standardMin);
+    const overtimeHours = Math.round(overtimeMin / 60 * 10) / 10;
     const leaveDays = userLeaves.reduce((sum: number, l: { days: number }) => sum + l.days, 0);
 
     return {
@@ -63,9 +64,15 @@ export async function getMonthlyReport(year: number, month: number) {
       workDays,
       totalWorkHours: Math.round(totalWorkMin / 60 * 10) / 10,
       totalBreakHours: Math.round(totalBreakMin / 60 * 10) / 10,
-      overtimeHours: Math.round(overtimeMin / 60 * 10) / 10,
+      overtimeHours,
       leaveDays,
-      overtimeAlert: overtimeMin > 45 * 60,
+      // 後方互換: 45h超でtrue
+      overtimeAlert: overtimeHours >= 45,
+      // 段階的アラート: "normal" | "warning" | "caution" | "danger"
+      overtimeLevel:
+        overtimeHours >= 45 ? "danger" as const :
+        overtimeHours >= 40 ? "caution" as const :
+        overtimeHours >= 30 ? "warning" as const : "normal" as const,
     };
   });
 
