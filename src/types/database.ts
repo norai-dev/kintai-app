@@ -85,3 +85,14 @@ export interface OvertimeRequest {
   approved_at: string | null;
   created_at: string;
 }
+
+export type HolidayType = 'national' | 'company';
+
+export interface Holiday {
+  id: string;
+  date: string;
+  name: string;
+  type: HolidayType;
+  created_at: string;
+  updated_at: string;
+}

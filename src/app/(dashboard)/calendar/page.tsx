@@ -31,7 +31,8 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { getMonthlyAttendance } from "../actions/calendar";
 import { upsertAttendance, deleteAttendance } from "../actions/attendance";
-import type { AttendanceRecord } from "@/types/database";
+import { getHolidaysInRange } from "../actions/holidays";
+import type { AttendanceRecord, Holiday } from "@/types/database";
 
 const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
 
@@ -67,6 +68,7 @@ export default function CalendarPage() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [loading, setLoading] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
   const [editDate, setEditDate] = useState("");
@@ -80,8 +82,17 @@ export default function CalendarPage() {
 
   const loadData = () => {
     setLoading(true);
-    getMonthlyAttendance(year, month).then((data) => {
-      setRecords(data);
+    const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const endDate = month === 12
+      ? `${year + 1}-01-01`
+      : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+
+    Promise.all([
+      getMonthlyAttendance(year, month),
+      getHolidaysInRange(startDate, endDate),
+    ]).then(([attendanceData, holidayData]) => {
+      setRecords(attendanceData);
+      setHolidays(holidayData);
       setLoading(false);
     });
   };
@@ -96,6 +107,11 @@ export default function CalendarPage() {
   const recordMap = new Map<string, AttendanceRecord>();
   records.forEach((r) => {
     recordMap.set(r.date, r);
+  });
+
+  const holidayMap = new Map<string, Holiday>();
+  holidays.forEach((h) => {
+    holidayMap.set(h.date, h);
   });
 
   const prevMonth = () => {
@@ -161,6 +177,8 @@ export default function CalendarPage() {
     ? new Date(editDate + "T00:00:00").toLocaleDateString("ja-JP", { month: "long", day: "numeric", weekday: "long" })
     : "";
 
+  const editDateHoliday = editDate ? holidayMap.get(editDate) : undefined;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -210,6 +228,7 @@ export default function CalendarPage() {
               <TableRow>
                 <TableHead className="w-24">日付</TableHead>
                 <TableHead className="w-12">曜日</TableHead>
+                <TableHead className="w-28">祝日</TableHead>
                 <TableHead>出勤</TableHead>
                 <TableHead>退勤</TableHead>
                 <TableHead>休憩</TableHead>
@@ -221,7 +240,7 @@ export default function CalendarPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                     読み込み中...
                   </TableCell>
                 </TableRow>
@@ -229,18 +248,35 @@ export default function CalendarPage() {
                 allDays.map((day) => {
                   const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
                   const record = recordMap.get(dateStr);
+                  const holiday = holidayMap.get(dateStr);
                   const dayOfWeek = new Date(year, month - 1, day).getDay();
                   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                  const isHoliday = !!holiday;
+                  // 祝日に出勤している場合は「休日出勤」フラグ
+                  const isHolidayWork = isHoliday && !!record?.clock_in;
+
+                  const rowBg = isHoliday
+                    ? "bg-red-50 hover:bg-red-100/70"
+                    : isWeekend
+                    ? "bg-muted/50 hover:bg-muted/70"
+                    : "hover:bg-muted/30";
 
                   return (
                     <TableRow
                       key={day}
-                      className={`${isWeekend ? "bg-muted/50" : ""} cursor-pointer hover:bg-muted/30`}
+                      className={`${rowBg} cursor-pointer`}
                       onClick={() => openEdit(day)}
                     >
                       <TableCell className="font-medium">{month}/{day}</TableCell>
-                      <TableCell className={dayOfWeek === 0 ? "text-red-500" : dayOfWeek === 6 ? "text-blue-500" : ""}>
+                      <TableCell className={dayOfWeek === 0 || isHoliday ? "text-red-500" : dayOfWeek === 6 ? "text-blue-500" : ""}>
                         {WEEKDAYS[dayOfWeek]}
+                      </TableCell>
+                      <TableCell>
+                        {holiday && (
+                          <span className="text-xs text-red-600 font-medium leading-tight block">
+                            {holiday.name}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell>{record ? formatHM(record.clock_in) : ""}</TableCell>
                       <TableCell>{record ? formatHM(record.clock_out) : ""}</TableCell>
@@ -251,11 +287,18 @@ export default function CalendarPage() {
                       </TableCell>
                       <TableCell>{record ? formatDuration(calcWorkMinutes(record)) : ""}</TableCell>
                       <TableCell>
-                        {record && (
-                          <Badge variant={record.work_location === "remote" ? "outline" : "secondary"} className="text-xs">
-                            {record.work_location === "remote" ? "リモート" : "出社"}
-                          </Badge>
-                        )}
+                        <div className="flex flex-col gap-1">
+                          {record && (
+                            <Badge variant={record.work_location === "remote" ? "outline" : "secondary"} className="text-xs">
+                              {record.work_location === "remote" ? "リモート" : "出社"}
+                            </Badge>
+                          )}
+                          {isHolidayWork && (
+                            <Badge variant="destructive" className="text-xs">
+                              休日出勤
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Button variant="ghost" size="sm" className="text-xs" onClick={(e) => { e.stopPropagation(); openEdit(day); }}>
@@ -275,9 +318,21 @@ export default function CalendarPage() {
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editDateLabel}の勤怠</DialogTitle>
+            <DialogTitle>
+              {editDateLabel}の勤怠
+              {editDateHoliday && (
+                <span className="ml-2 text-sm font-normal text-red-600">
+                  ({editDateHoliday.name})
+                </span>
+              )}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {editDateHoliday && (
+              <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                この日は祝日です。出勤した場合は休日出勤として扱われます。
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>出勤時刻</Label>
