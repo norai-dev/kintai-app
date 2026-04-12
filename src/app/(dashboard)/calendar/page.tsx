@@ -67,6 +67,20 @@ function formatDuration(minutes: number): string {
   return `${h}:${m.toString().padStart(2, "0")}`;
 }
 
+function LeaveBadge({ leave }: { leave: LeaveRequest }) {
+  const unit = leave.leave_unit ?? "full_day";
+  if (unit === "half_am") {
+    return <Badge variant="secondary" className="text-xs bg-green-100 text-green-800">午前休</Badge>;
+  }
+  if (unit === "half_pm") {
+    return <Badge variant="secondary" className="text-xs bg-green-100 text-green-800">午後休</Badge>;
+  }
+  if (unit === "hourly") {
+    return <Badge variant="secondary" className="text-xs bg-teal-100 text-teal-800">時間休 {leave.hours}h</Badge>;
+  }
+  return <Badge variant="secondary" className="text-xs bg-green-100 text-green-800">有給</Badge>;
+}
+
 export default function CalendarPage() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
@@ -330,6 +344,7 @@ export default function CalendarPage() {
                   const isHoliday = !!holiday;
                   // 祝日に出勤している場合は「休日出勤」フラグ
                   const isHolidayWork = isHoliday && !!record?.clock_in;
+                  const dayLeaves = leaveMap.get(dateStr) ?? [];
 
                   const rowBg = isHoliday
                     ? "bg-red-50 hover:bg-red-100/70"
@@ -389,6 +404,9 @@ export default function CalendarPage() {
                               休日出勤
                             </Badge>
                           )}
+                          {dayLeaves.map((leave) => (
+                            <LeaveBadge key={leave.id} leave={leave} />
+                          ))}
                         </div>
                       </TableCell>
                       <TableCell>

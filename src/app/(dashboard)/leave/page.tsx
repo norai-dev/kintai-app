@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/table";
 import { toast } from "sonner";
 import { getLeaveBalance, getMyLeaveRequests, submitLeaveRequest } from "../actions/leave";
-import type { LeaveRequest, LeaveBalance } from "@/types/database";
+import type { LeaveRequest, LeaveBalance, LeaveUnit } from "@/types/database";
 
 const statusLabel: Record<string, { text: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   pending: { text: "申請中", variant: "outline" },
@@ -38,13 +38,30 @@ const leaveTypeLabel: Record<string, string> = {
   special: "特別休暇",
 };
 
+const leaveUnitLabel: Record<LeaveUnit, string> = {
+  full_day: "全日",
+  half_am: "午前半休",
+  half_pm: "午後半休",
+  hourly: "時間単位",
+};
+
+function formatLeaveUnit(req: LeaveRequest): string {
+  const unit = req.leave_unit ?? "full_day";
+  if (unit === "hourly" && req.hours) {
+    return `時間単位 (${req.hours}h)`;
+  }
+  return leaveUnitLabel[unit] ?? unit;
+}
+
 export default function LeavePage() {
   const [balance, setBalance] = useState<LeaveBalance | null>(null);
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
   const [leaveType, setLeaveType] = useState("paid");
+  const [leaveUnit, setLeaveUnit] = useState<LeaveUnit>("full_day");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [days, setDays] = useState("1");
+  const [hours, setHours] = useState("1");
   const [reason, setReason] = useState("");
   const [isPending, startTransition] = useTransition();
 
@@ -53,14 +70,29 @@ export default function LeavePage() {
     getMyLeaveRequests().then(setRequests);
   }, []);
 
+  // leave_unit 変更時に関連フィールドをリセット
+  const handleLeaveUnitChange = (unit: LeaveUnit) => {
+    setLeaveUnit(unit);
+    if (unit === "half_am" || unit === "half_pm") {
+      setDays("0.5");
+      setEndDate("");
+    } else if (unit === "hourly") {
+      setEndDate("");
+    } else {
+      setDays("1");
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     startTransition(async () => {
       const result = await submitLeaveRequest({
         leave_type: leaveType,
+        leave_unit: leaveUnit,
         start_date: startDate,
         end_date: endDate || startDate,
         days: parseFloat(days),
+        hours: leaveUnit === "hourly" ? parseFloat(hours) : null,
         reason,
       });
       if (result.error) {
@@ -70,13 +102,22 @@ export default function LeavePage() {
         setStartDate("");
         setEndDate("");
         setDays("1");
+        setHours("1");
         setReason("");
+        setLeaveUnit("full_day");
+        getLeaveBalance().then(setBalance);
         getMyLeaveRequests().then(setRequests);
       }
     });
   };
 
   const remaining = balance ? balance.total_days - balance.used_days : null;
+  const hourlyRemaining = balance
+    ? (balance.hourly_max_hours ?? 40) - (balance.hourly_used_hours ?? 0)
+    : null;
+
+  const isHalfDay = leaveUnit === "half_am" || leaveUnit === "half_pm";
+  const isHourly = leaveUnit === "hourly";
 
   return (
     <div className="space-y-6">
@@ -108,6 +149,11 @@ export default function LeavePage() {
             <p className={`text-3xl font-bold ${remaining !== null && remaining <= 5 ? "text-destructive" : ""}`}>
               {remaining !== null ? `${remaining}日` : "—"}
             </p>
+            {balance && (
+              <p className="text-xs text-muted-foreground mt-1">
+                時間単位: {balance.hourly_used_hours ?? 0} / {balance.hourly_max_hours ?? 40} 時間使用済
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -120,6 +166,7 @@ export default function LeavePage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
+              {/* 休暇種類 */}
               <div className="space-y-2">
                 <Label>休暇種類</Label>
                 <Select value={leaveType} onValueChange={(v) => v && setLeaveType(v)}>
@@ -133,30 +180,87 @@ export default function LeavePage() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {/* 休暇区分 */}
               <div className="space-y-2">
-                <Label>日数</Label>
-                <Select value={days} onValueChange={(v) => v && setDays(v)}>
+                <Label>休暇区分</Label>
+                <Select value={leaveUnit} onValueChange={(v) => v && handleLeaveUnitChange(v as LeaveUnit)}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="0.5">0.5日（半休）</SelectItem>
-                    <SelectItem value="1">1日</SelectItem>
-                    <SelectItem value="2">2日</SelectItem>
-                    <SelectItem value="3">3日</SelectItem>
-                    <SelectItem value="5">5日</SelectItem>
+                    <SelectItem value="full_day">全日</SelectItem>
+                    <SelectItem value="half_am">午前半休</SelectItem>
+                    <SelectItem value="half_pm">午後半休</SelectItem>
+                    <SelectItem value="hourly">時間単位</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+
+              {/* 開始日 */}
               <div className="space-y-2">
-                <Label>開始日</Label>
+                <Label>{isHalfDay || isHourly ? "日付" : "開始日"}</Label>
                 <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
               </div>
-              <div className="space-y-2">
-                <Label>終了日</Label>
-                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-              </div>
+
+              {/* 終了日（全日のみ表示） */}
+              {!isHalfDay && !isHourly && (
+                <div className="space-y-2">
+                  <Label>終了日</Label>
+                  <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                </div>
+              )}
+
+              {/* 日数（全日のみ手動入力） */}
+              {!isHalfDay && !isHourly && (
+                <div className="space-y-2">
+                  <Label>日数</Label>
+                  <Select value={days} onValueChange={(v) => v && setDays(v)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1日</SelectItem>
+                      <SelectItem value="2">2日</SelectItem>
+                      <SelectItem value="3">3日</SelectItem>
+                      <SelectItem value="5">5日</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* 時間数（時間単位のみ表示） */}
+              {isHourly && (
+                <div className="space-y-2">
+                  <Label>
+                    時間数
+                    {hourlyRemaining !== null && (
+                      <span className="text-xs text-muted-foreground ml-2">
+                        (残 {hourlyRemaining}時間)
+                      </span>
+                    )}
+                  </Label>
+                  <Select value={hours} onValueChange={(v) => v && setHours(v)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[1, 2, 3, 4, 5, 6, 7, 8].map((h) => (
+                        <SelectItem key={h} value={String(h)}>{h}時間</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* 半日は自動計算のインフォ表示 */}
+              {isHalfDay && (
+                <div className="flex items-center text-sm text-muted-foreground">
+                  <span>0.5日として自動計算されます</span>
+                </div>
+              )}
             </div>
+
             <div className="space-y-2">
               <Label>理由</Label>
               <Textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="任意" />
@@ -178,6 +282,7 @@ export default function LeavePage() {
             <TableHeader>
               <TableRow>
                 <TableHead>種類</TableHead>
+                <TableHead>区分</TableHead>
                 <TableHead>期間</TableHead>
                 <TableHead>日数</TableHead>
                 <TableHead>理由</TableHead>
@@ -187,7 +292,7 @@ export default function LeavePage() {
             <TableBody>
               {requests.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                     申請履歴はありません
                   </TableCell>
                 </TableRow>
@@ -195,6 +300,7 @@ export default function LeavePage() {
                 requests.map((req) => (
                   <TableRow key={req.id}>
                     <TableCell>{leaveTypeLabel[req.leave_type] ?? req.leave_type}</TableCell>
+                    <TableCell className="text-sm">{formatLeaveUnit(req)}</TableCell>
                     <TableCell>{req.start_date}{req.end_date !== req.start_date ? ` 〜 ${req.end_date}` : ""}</TableCell>
                     <TableCell>{req.days}日</TableCell>
                     <TableCell className="max-w-48 truncate">{req.reason || "—"}</TableCell>
