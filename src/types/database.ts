@@ -5,6 +5,7 @@ export type AttendanceSource = "web" | "slack" | "line";
 export type LeaveType = "paid" | "sick" | "special";
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 export type CorrectionField = "clock_in" | "clock_out" | "break_start" | "break_end";
+export type LeaveUnit = "full_day" | "half_am" | "half_pm" | "hourly";
 
 export interface User {
   id: string;
@@ -43,6 +44,8 @@ export interface LeaveBalance {
   grant_date: string;
   total_days: number;
   used_days: number;
+  hourly_used_hours: number;
+  hourly_max_hours: number;
   updated_at: string;
 }
 
@@ -50,9 +53,11 @@ export interface LeaveRequest {
   id: string;
   user_id: string;
   leave_type: LeaveType;
+  leave_unit: LeaveUnit;
   start_date: string;
   end_date: string;
   days: number;
+  hours: number | null;
   reason: string | null;
   status: ApprovalStatus;
   approved_by: string | null;
@@ -86,6 +91,14 @@ export interface OvertimeRequest {
   created_at: string;
 }
 
+export interface BreakRecord {
+  id: string;
+  attendance_id: string;
+  break_start: string;
+  break_end: string | null;
+  created_at: string;
+}
+
 export type HolidayType = 'national' | 'company';
 
 export interface Holiday {
@@ -95,4 +108,16 @@ export interface Holiday {
   type: HolidayType;
   created_at: string;
   updated_at: string;
+}
+
+export interface MonthlyClosing {
+  id: string;
+  year: number;
+  month: number;
+  closed_at: string;
+  closed_by: string;
+  reopened_at: string | null;
+  reopened_by: string | null;
+  reopen_reason: string | null;
+  created_at: string;
 }

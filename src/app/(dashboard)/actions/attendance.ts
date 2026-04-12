@@ -3,6 +3,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUser } from "@/lib/get-current-user";
 import { revalidatePath } from "next/cache";
+import type { BreakRecord } from "@/types/database";
+import { isMonthClosed } from "./closing";
 
 function todayDate() {
   return new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD
@@ -61,13 +63,31 @@ export async function startBreak() {
   const supabase = await createClient();
   const now = new Date().toISOString();
 
-  const { error } = await supabase
+  // 今日の attendance_record を取得
+  const { data: record, error: fetchError } = await supabase
     .from("attendance_records")
-    .update({ break_start: now })
+    .select("id, break_start")
     .eq("user_id", user.id)
-    .eq("date", todayDate());
+    .eq("date", todayDate())
+    .single();
 
-  if (error) return { error: error.message };
+  if (fetchError || !record) return { error: "出勤記録が見つかりません" };
+
+  // break_records に新しい休憩を追加
+  const { error: breakError } = await supabase.from("break_records").insert({
+    attendance_id: record.id,
+    break_start: now,
+  });
+
+  if (breakError) return { error: breakError.message };
+
+  // 後方互換: 最初の休憩のみ attendance_records にも書き込む
+  if (!record.break_start) {
+    await supabase
+      .from("attendance_records")
+      .update({ break_start: now })
+      .eq("id", record.id);
+  }
 
   revalidatePath("/");
   return { success: true };
@@ -80,16 +100,58 @@ export async function endBreak() {
   const supabase = await createClient();
   const now = new Date().toISOString();
 
-  const { error } = await supabase
+  // 今日の attendance_record を取得
+  const { data: record, error: fetchError } = await supabase
+    .from("attendance_records")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("date", todayDate())
+    .single();
+
+  if (fetchError || !record) return { error: "出勤記録が見つかりません" };
+
+  // 未終了の最新 break_record を取得
+  const { data: openBreak, error: openBreakError } = await supabase
+    .from("break_records")
+    .select("id")
+    .eq("attendance_id", record.id)
+    .is("break_end", null)
+    .order("break_start", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (openBreakError || !openBreak) {
+    return { error: "開始中の休憩が見つかりません" };
+  }
+
+  const { error: updateError } = await supabase
+    .from("break_records")
+    .update({ break_end: now })
+    .eq("id", openBreak.id);
+
+  if (updateError) return { error: updateError.message };
+
+  // 後方互換: attendance_records.break_end も更新（最初の休憩終了時のみ）
+  await supabase
     .from("attendance_records")
     .update({ break_end: now })
-    .eq("user_id", user.id)
-    .eq("date", todayDate());
-
-  if (error) return { error: error.message };
+    .eq("id", record.id)
+    .is("break_end", null);
 
   revalidatePath("/");
   return { success: true };
+}
+
+export async function getBreakRecords(attendanceId: string): Promise<BreakRecord[]> {
+  const supabase = await createClient();
+
+  const { data } = await supabase
+    .from("break_records")
+    .select("*")
+    .eq("attendance_id", attendanceId)
+    .order("break_start", { ascending: true });
+
+  return data ?? [];
 }
 
 export async function getTodayAttendance() {
@@ -119,6 +181,14 @@ export async function upsertAttendance(formData: {
 }) {
   const user = await getCurrentUser();
   if (!user) return { error: "認証されていません" };
+
+  // 月次締め済みチェック
+  const dateParts = formData.date.split("-");
+  const targetYear = parseInt(dateParts[0], 10);
+  const targetMonth = parseInt(dateParts[1], 10);
+  if (await isMonthClosed(targetYear, targetMonth)) {
+    return { error: `${targetYear}年${targetMonth}月は月次確定済みのため編集できません` };
+  }
 
   const supabase = await createClient();
 
@@ -168,6 +238,14 @@ export async function upsertAttendance(formData: {
 export async function deleteAttendance(date: string) {
   const user = await getCurrentUser();
   if (!user) return { error: "認証されていません" };
+
+  // 月次締め済みチェック
+  const dateParts = date.split("-");
+  const targetYear = parseInt(dateParts[0], 10);
+  const targetMonth = parseInt(dateParts[1], 10);
+  if (await isMonthClosed(targetYear, targetMonth)) {
+    return { error: `${targetYear}年${targetMonth}月は月次確定済みのため削除できません` };
+  }
 
   const supabase = await createClient();
 
