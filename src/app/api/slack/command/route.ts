@@ -100,9 +100,10 @@ export async function POST(request: Request) {
 
       case "break":
       case "休憩": {
+        // 今日の attendance_record を取得
         const { data: record } = await supabase
           .from("attendance_records")
-          .select("*")
+          .select("id, clock_in, break_start")
           .eq("user_id", targetUser.id)
           .eq("date", todayDate())
           .single();
@@ -115,28 +116,53 @@ export async function POST(request: Request) {
         }
 
         const now = new Date().toISOString();
-        if (!record.break_start) {
+
+        // 未終了の break_record が存在するか確認（複数回休憩対応）
+        const { data: openBreak } = await supabase
+          .from("break_records")
+          .select("id")
+          .eq("attendance_id", record.id)
+          .is("break_end", null)
+          .order("break_start", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (openBreak) {
+          // 開いている休憩があれば終了
           await supabase
-            .from("attendance_records")
-            .update({ break_start: now })
-            .eq("id", record.id);
-          return NextResponse.json({
-            response_type: "in_channel",
-            text: `${targetUser.name} が休憩に入りました ☕`,
-          });
-        } else if (!record.break_end) {
+            .from("break_records")
+            .update({ break_end: now })
+            .eq("id", openBreak.id);
+
+          // 後方互換: attendance_records.break_end も更新（初回のみ）
           await supabase
             .from("attendance_records")
             .update({ break_end: now })
-            .eq("id", record.id);
+            .eq("id", record.id)
+            .is("break_end", null);
+
           return NextResponse.json({
             response_type: "in_channel",
             text: `${targetUser.name} が休憩から戻りました 💪`,
           });
         } else {
+          // 新しい休憩を開始
+          await supabase.from("break_records").insert({
+            attendance_id: record.id,
+            break_start: now,
+          });
+
+          // 後方互換: 最初の休憩のみ attendance_records にも書き込む
+          if (!record.break_start) {
+            await supabase
+              .from("attendance_records")
+              .update({ break_start: now })
+              .eq("id", record.id);
+          }
+
           return NextResponse.json({
-            response_type: "ephemeral",
-            text: "本日の休憩は既に記録済みです。",
+            response_type: "in_channel",
+            text: `${targetUser.name} が休憩に入りました ☕`,
           });
         }
       }
@@ -145,7 +171,7 @@ export async function POST(request: Request) {
       case "確認": {
         const { data: record } = await supabase
           .from("attendance_records")
-          .select("*")
+          .select("id, clock_in, clock_out")
           .eq("user_id", targetUser.id)
           .eq("date", todayDate())
           .single();
@@ -161,11 +187,36 @@ export async function POST(request: Request) {
         const clockOut = record.clock_out
           ? new Date(record.clock_out).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tokyo" })
           : "—";
-        const status = record.clock_out ? "退勤済" : record.break_start && !record.break_end ? "休憩中" : "勤務中";
+
+        // break_records から進行中の休憩を確認
+        const { data: openBreak } = await supabase
+          .from("break_records")
+          .select("id")
+          .eq("attendance_id", record.id)
+          .is("break_end", null)
+          .limit(1)
+          .maybeSingle();
+
+        const status = record.clock_out ? "退勤済" : openBreak ? "休憩中" : "勤務中";
+
+        // 本日の休憩合計
+        const { data: breaks } = await supabase
+          .from("break_records")
+          .select("break_start, break_end")
+          .eq("attendance_id", record.id)
+          .not("break_end", "is", null);
+
+        const totalBreakMin = (breaks ?? []).reduce((sum: number, b: { break_start: string; break_end: string }) => {
+          return sum + Math.floor(
+            (new Date(b.break_end).getTime() - new Date(b.break_start).getTime()) / 60000
+          );
+        }, 0);
+
+        const breakText = totalBreakMin > 0 ? `\n• 休憩合計: ${totalBreakMin}分` : "";
 
         return NextResponse.json({
           response_type: "ephemeral",
-          text: `📋 *${targetUser.name}の本日の勤怠*\n• 出勤: ${clockIn}\n• 退勤: ${clockOut}\n• ステータス: ${status}`,
+          text: `📋 *${targetUser.name}の本日の勤怠*\n• 出勤: ${clockIn}\n• 退勤: ${clockOut}\n• ステータス: ${status}${breakText}`,
         });
       }
 
@@ -176,7 +227,7 @@ export async function POST(request: Request) {
             "📖 *使い方*",
             "`/kintai in` — 出勤",
             "`/kintai out` — 退勤",
-            "`/kintai break` — 休憩開始/終了",
+            "`/kintai break` — 休憩開始/終了（複数回可）",
             "`/kintai status` — 本日の勤怠確認",
           ].join("\n"),
         });

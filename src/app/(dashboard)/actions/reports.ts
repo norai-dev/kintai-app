@@ -24,6 +24,26 @@ export async function getMonthlyReport(year: number, month: number) {
     .gte("date", monthStart)
     .lt("date", monthEnd);
 
+  // 当月の break_records を一括取得（attendance_id で JOIN）
+  const attendanceIds = (records ?? []).map((r: { id: string }) => r.id);
+  const { data: allBreaks } = attendanceIds.length > 0
+    ? await supabase
+        .from("break_records")
+        .select("*")
+        .in("attendance_id", attendanceIds)
+        .not("break_end", "is", null)
+    : { data: [] };
+
+  // attendance_id -> 休憩合計分数 のマップを構築
+  const breakMinMap = new Map<string, number>();
+  (allBreaks ?? []).forEach((b: { attendance_id: string; break_start: string; break_end: string | null }) => {
+    if (!b.break_end) return;
+    const min = Math.floor(
+      (new Date(b.break_end).getTime() - new Date(b.break_start).getTime()) / 60000
+    );
+    breakMinMap.set(b.attendance_id, (breakMinMap.get(b.attendance_id) ?? 0) + min);
+  });
+
   // 当月の休暇取得
   const { data: leaves } = await supabase
     .from("leave_requests")
@@ -41,14 +61,20 @@ export async function getMonthlyReport(year: number, month: number) {
     let totalBreakMin = 0;
     let workDays = 0;
 
-    userRecords.forEach((r: { clock_in: string | null; clock_out: string | null; break_start: string | null; break_end: string | null }) => {
+    userRecords.forEach((r: { id: string; clock_in: string | null; clock_out: string | null; break_start: string | null; break_end: string | null }) => {
       if (!r.clock_in || !r.clock_out) return;
       workDays++;
       const diff = new Date(r.clock_out).getTime() - new Date(r.clock_in).getTime();
+
+      // break_records が存在すればそちらを優先、なければ attendance_records の値を使用
       let bMin = 0;
-      if (r.break_start && r.break_end) {
+      if (breakMinMap.has(r.id)) {
+        bMin = breakMinMap.get(r.id)! * 60000;
+      } else if (r.break_start && r.break_end) {
+        // フォールバック: break_records 移行前の旧データ
         bMin = new Date(r.break_end).getTime() - new Date(r.break_start).getTime();
       }
+
       totalBreakMin += Math.floor(bMin / 60000);
       totalWorkMin += Math.floor((diff - bMin) / 60000);
     });
