@@ -12,17 +12,63 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { getDashboardData } from "../../actions/dashboard";
+import { getMonthlyOvertimeLevel, getAnnualOvertimeLevel } from "@/lib/overtime-utils";
+
+type OvertimeEntry = {
+  name: string;
+  hours: number;
+  alert: boolean;
+  annualHours: number;
+  multiMonthAvgHours: number | null;
+  annualProgressPercent: number;
+};
 
 type DashboardData = {
   totalUsers: number;
   clockedIn: number;
   todayMembers: { name: string; clock_in: string; clock_out: string | null }[];
   pendingRequests: number;
-  overtimeRanking: { name: string; hours: number; alert: boolean }[];
+  overtimeRanking: OvertimeEntry[];
+  approachingMonthly: OvertimeEntry[];
+  approachingMultiMonth: OvertimeEntry[];
 };
 
 function formatHM(iso: string) {
   return new Date(iso).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+}
+
+/** 月間残業時間に応じた Badge を返す */
+function OvertimeBadge({ hours }: { hours: number }) {
+  const level = getMonthlyOvertimeLevel(hours);
+  return (
+    <Badge
+      variant={level.badgeVariant}
+      className={level.badgeClassName || undefined}
+    >
+      {level.label}
+    </Badge>
+  );
+}
+
+/** 年間残業進捗バー */
+function AnnualProgressBar({ hours, percent }: { hours: number; percent: number }) {
+  const level = getAnnualOvertimeLevel(hours);
+  const barColor =
+    level.level === "danger" ? "bg-red-500" :
+    level.level === "caution" ? "bg-orange-400" :
+    level.level === "warning" ? "bg-yellow-400" : "bg-green-400";
+
+  return (
+    <div className="flex items-center gap-2 min-w-[140px]">
+      <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${barColor}`}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <span className="text-xs text-muted-foreground whitespace-nowrap">{hours}h</span>
+    </div>
+  );
 }
 
 export default function AdminDashboardPage() {
@@ -70,6 +116,52 @@ export default function AdminDashboardPage() {
         </Card>
       </div>
 
+      {/* 36協定アラート一覧 */}
+      {(data.approachingMonthly.length > 0 || data.approachingMultiMonth.length > 0) && (
+        <Card className="border-orange-200 bg-orange-50/30">
+          <CardHeader>
+            <CardTitle className="text-base text-orange-700">36協定アラート</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {data.approachingMonthly.length > 0 && (
+              <div>
+                <p className="text-sm font-medium text-muted-foreground mb-2">
+                  今月の残業 30h 以上のメンバー
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {data.approachingMonthly.map((u, i) => (
+                    <div key={i} className="flex items-center gap-1.5 rounded-md border px-2 py-1 bg-white text-sm">
+                      <span className="font-medium">{u.name}</span>
+                      <OvertimeBadge hours={u.hours} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {data.approachingMultiMonth.length > 0 && (
+              <div>
+                <p className="text-sm font-medium text-muted-foreground mb-2">
+                  複数月平均 60h 以上のメンバー（過労死ライン 80h に注意）
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {data.approachingMultiMonth.map((u, i) => (
+                    <div key={i} className="flex items-center gap-1.5 rounded-md border px-2 py-1 bg-white text-sm">
+                      <span className="font-medium">{u.name}</span>
+                      <Badge
+                        variant="outline"
+                        className="border-orange-400 text-orange-600 bg-orange-50"
+                      >
+                        平均{u.multiMonthAvgHours}h
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* 本日の出勤状況 */}
       <Card>
         <CardHeader>
@@ -111,7 +203,7 @@ export default function AdminDashboardPage() {
         </CardContent>
       </Card>
 
-      {/* 残業ランキング */}
+      {/* 残業ランキング（今月・年間・複数月平均） */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">今月の残業時間</CardTitle>
@@ -121,14 +213,16 @@ export default function AdminDashboardPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>名前</TableHead>
-                <TableHead>残業時間</TableHead>
+                <TableHead>今月</TableHead>
+                <TableHead>年間累計 / 360h</TableHead>
+                <TableHead>複数月平均</TableHead>
                 <TableHead>状態</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {data.overtimeRanking.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                     今月の勤務データはありません
                   </TableCell>
                 </TableRow>
@@ -138,13 +232,26 @@ export default function AdminDashboardPage() {
                     <TableCell className="font-medium">{u.name}</TableCell>
                     <TableCell>{u.hours}h</TableCell>
                     <TableCell>
-                      {u.alert ? (
-                        <Badge variant="destructive">45h超過</Badge>
-                      ) : u.hours > 30 ? (
-                        <Badge variant="outline">注意</Badge>
+                      <AnnualProgressBar
+                        hours={u.annualHours}
+                        percent={u.annualProgressPercent}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      {u.multiMonthAvgHours !== null ? (
+                        <span className={
+                          u.multiMonthAvgHours >= 80 ? "text-destructive font-medium" :
+                          u.multiMonthAvgHours >= 60 ? "text-orange-600 font-medium" :
+                          "text-muted-foreground"
+                        }>
+                          {u.multiMonthAvgHours}h
+                        </span>
                       ) : (
-                        <Badge variant="secondary">正常</Badge>
+                        <span className="text-muted-foreground text-xs">—</span>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <OvertimeBadge hours={u.hours} />
                     </TableCell>
                   </TableRow>
                 ))

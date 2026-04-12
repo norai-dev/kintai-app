@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { getMonthlyReport, generateCSV, generateDetailCSV } from "../../actions/reports";
+import { getMonthlyOvertimeLevel } from "@/lib/overtime-utils";
 
 type ReportRow = {
   name: string;
@@ -23,6 +24,7 @@ type ReportRow = {
   overtimeHours: number;
   leaveDays: number;
   overtimeAlert: boolean;
+  overtimeLevel?: "normal" | "warning" | "caution" | "danger";
 };
 
 export default function ReportsPage() {
@@ -132,13 +134,17 @@ export default function ReportsPage() {
                     <TableCell>{r.overtimeHours}h</TableCell>
                     <TableCell>{r.leaveDays}日</TableCell>
                     <TableCell>
-                      {r.overtimeAlert ? (
-                        <Badge variant="destructive">45h超過</Badge>
-                      ) : r.overtimeHours > 30 ? (
-                        <Badge variant="outline">注意</Badge>
-                      ) : (
-                        <Badge variant="secondary">正常</Badge>
-                      )}
+                      {(() => {
+                        const level = getMonthlyOvertimeLevel(r.overtimeHours);
+                        return (
+                          <Badge
+                            variant={level.badgeVariant}
+                            className={level.badgeClassName || undefined}
+                          >
+                            {level.label}
+                          </Badge>
+                        );
+                      })()}
                     </TableCell>
                   </TableRow>
                 ))
